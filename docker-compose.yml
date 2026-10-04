@@ -1,18 +1,15 @@
 # Запуск всей системы одной командой.
 #
-#   git clone --depth 1 https://github.com/nikaydo/grpc-contract.git ../grpc-contract
-#   git clone --depth 1 https://github.com/nikaydo/auth-service.git ../auth-service
-#   git clone --depth 1 https://github.com/nikaydo/api-tokens-service.git ../api-tokens-service
-#   git clone --depth 1 https://github.com/nikaydo/video-service.git ../video-service
-#   docker compose up --build
+#   task clone-services    # клонировать сервисы в соседние каталоги
+#   task up
 #
 # Шлюз собирается из этого репозитория, остальные сервисы — из соседних
-# клонов. держать всю систему в одном репозитории нельзя: каждый сервис
-# разворачивается независимо, и общий compose нужен только для разработки.
-
-x-contract: &contract
-  args:
-    CONTRACT_PATH: ../grpc-contract
+# клонов: у каждого своя версия, своя база и своя схема развёртывания.
+# Держать систему в одном репозитории нельзя — сервисы выходят из строя
+# независимо.
+#
+# Контракт клонировать не нужно: он подтягивается из прокси модулей по
+# версии из go.mod каждого сервиса.
 
 services:
   postgres:
@@ -48,7 +45,6 @@ services:
   auth-service:
     build:
       context: ../auth-service
-      <<: *contract
     depends_on:
       postgres:
         condition: service_healthy
@@ -66,7 +62,6 @@ services:
   api-tokens-service:
     build:
       context: ../api-tokens-service
-      <<: *contract
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,7 +74,6 @@ services:
   video-service:
     build:
       context: ../video-service
-      <<: *contract
     depends_on:
       mongo:
         condition: service_healthy
@@ -96,7 +90,6 @@ services:
   video-platform:
     build:
       context: .
-      <<: *contract
     depends_on:
       - auth-service
       - api-tokens-service

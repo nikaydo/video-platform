@@ -2,7 +2,9 @@ version: '3'
 
 vars:
   BINARY: bin/video-platform
-  CONTRACT: ../grpc-contract
+  # Контракт живёт в отдельном репозитории и подтягивается как модуль.
+  # SERVICES перечисляет клоны, из которых собираются сервисы системы.
+  SERVICES: auth-service api-tokens-service video-service
 
 tasks:
   default:
@@ -11,14 +13,9 @@ tasks:
       - task --list
 
   deps:
-    desc: Подтянуть контракт и скачать зависимости
+    desc: Скачать зависимости
     cmds:
-      - |
-        if [ ! -d "{{.CONTRACT}}" ]; then
-          git clone --depth 1 https://github.com/nikaydo/grpc-contract.git "{{.CONTRACT}}"
-        fi
-        go mod edit -replace github.com/nikaydo/grpc-contract={{.CONTRACT}}
-        go mod download
+      - go mod download
 
   build:
     desc: Собрать сервис
@@ -57,6 +54,9 @@ tasks:
     cmds:
       - test -z "$(gofmt -l . | grep -v '^$$' || true)"
       - go vet ./...
+      - |
+        go install honnef.co/go/tools/cmd/staticcheck@latest
+        staticcheck ./...
 
   fmt:
     desc: Отформатировать код
@@ -67,7 +67,7 @@ tasks:
     desc: Клонировать соседние сервисы, нужные для сборки
     cmds:
       - |
-        for s in grpc-contract auth-service api-tokens-service video-service; do
+        for s in {{.SERVICES}}; do
           if [ ! -d "../$s" ]; then
             git clone --depth 1 "https://github.com/nikaydo/$s.git" "../$s"
           fi

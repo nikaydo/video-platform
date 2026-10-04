@@ -6,7 +6,7 @@ require (
 	github.com/caarlos0/env/v11 v11.3.1
 	github.com/go-chi/chi/v5 v5.2.2
 	github.com/joho/godotenv v1.5.1
-	github.com/nikaydo/grpc-contract v0.0.0
+	github.com/nikaydo/grpc-contract v0.4.0
 	google.golang.org/grpc v1.81.0
 )
 
@@ -17,5 +17,3 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260226221140-a57be14db171 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-replace github.com/nikaydo/grpc-contract => ../grpc-contract
