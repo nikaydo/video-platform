@@ -1,0 +1,74 @@
+version: '3'
+
+vars:
+  BINARY: bin/video-platform
+  CONTRACT: ../grpc-contract
+
+tasks:
+  default:
+    desc: Список доступных задач
+    cmds:
+      - task --list
+
+  deps:
+    desc: Подтянуть контракт и скачать зависимости
+    cmds:
+      - |
+        if [ ! -d "{{.CONTRACT}}" ]; then
+          git clone --depth 1 https://github.com/nikaydo/grpc-contract.git "{{.CONTRACT}}"
+        fi
+        go mod edit -replace github.com/nikaydo/grpc-contract={{.CONTRACT}}
+        go mod download
+
+  build:
+    desc: Собрать сервис
+    deps: [deps]
+    cmds:
+      - go build -trimpath -o {{.BINARY}} ./cmd
+    generates:
+      - '{{.BINARY}}'
+
+  run:
+    desc: Запустить сервис
+    deps: [build]
+    cmds:
+      - '{{.BINARY}}'
+
+  test:
+    desc: Модульные тесты
+    cmds:
+      - go test -race ./...
+
+  test:integration:
+    desc: Интеграционные тесты (нужен TEST_DATABASE_URL)
+    env:
+      TEST_DATABASE_URL: '{{.TEST_DATABASE_URL | default ""}}'
+    cmds:
+      - go test -race -v ./internal/database/
+
+  cover:
+    desc: Тесты с отчётом о покрытии
+    cmds:
+      - go test -race -covermode=atomic -coverprofile=coverage.out ./...
+      - go tool cover -func=coverage.out
+
+  lint:
+    desc: Форматирование и статический анализ
+    cmds:
+      - test -z "$(gofmt -l . | grep -v '^$$' || true)"
+      - go vet ./...
+
+  fmt:
+    desc: Отформатировать код
+    cmds:
+      - gofmt -w .
+
+  up:
+    desc: Поднять сервис и базу в Docker
+    cmds:
+      - docker compose up --build
+
+  down:
+    desc: Остановить контейнеры
+    cmds:
+      - docker compose down -v

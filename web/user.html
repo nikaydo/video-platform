@@ -102,7 +102,116 @@
 </div>
 
   <script>
-    // Переключение табов
+    // ── API-слой ────────────────────────────────────────────────────────────
+    //
+    // Токен передаётся в заголовке Authorization, а не параметром query:
+    // query попадает в журналы сервера и прокси, в историю браузера и в
+    // заголовок Referer при переходах на другие сайты.
+    //
+    // При 401 с признаком «expired» сессия обновляется и запрос повторяется
+    // один раз: access-токен живёт 15 минут, а refresh продлевает сессию
+    // незаметно для пользователя.
+
+    let refreshInFlight = null;
+
+    async function refreshSession() {
+      if (refreshInFlight) return refreshInFlight;
+      refreshInFlight = (async () => {
+        try {
+          const res = await fetch('/api/refresh', {
+            method: 'POST',
+            credentials: 'same-origin',
+          });
+          return res.ok;
+        } catch {
+          return false;
+        } finally {
+          refreshInFlight = null;
+        }
+      })();
+      return refreshInFlight;
+    }
+
+    async function apiFetch(url, options = {}) {
+      const send = () => fetch(url, { credentials: 'same-origin', ...options });
+
+      let res;
+      try {
+        res = await send();
+      } catch (err) {
+        throw new Error('Нет связи с сервером');
+      }
+
+      if (res.status !== 401) return res;
+
+      if (res.headers.get('X-Auth-Reason') === 'expired' && await refreshSession()) {
+        res = await send();
+        if (res.status !== 401) return res;
+      }
+
+      window.location.href = '/login';
+      return null;
+    }
+
+    // withToken добавляет заголовок авторизации к запросу.
+    function withToken(token, options = {}) {
+      return {
+        ...options,
+        headers: {
+          ...(options.headers || {}),
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+      };
+    }
+
+    async function readError(res, fallback) {
+      try {
+        const data = await res.json();
+        return data.error || fallback;
+      } catch {
+        return fallback;
+      }
+    }
+
+    // ── Хранение выпущенных токенов ────────────────────────────────────────
+    //
+    // Сервер хранит только хеш токена и не может вернуть его значение, поэтому
+    // список показывает хеши. Сами значения сохраняются в localStorage того
+    // браузера, где они были выпущены: иначе токен пришлось бы вводить
+    // вручную при каждой загрузке.
+    //
+    // localStorage доступен из JavaScript, в отличие от HttpOnly-cookie. Это
+    // осознанный размен: токен нужен для машинных запросов из браузера и не
+    // даёт доступа к сессии пользователя.
+
+    const TOKEN_STORE = 'videoPlatform.tokens';
+
+    function loadStoredTokens() {
+      try {
+        const raw = localStorage.getItem(TOKEN_STORE);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+
+    function storeToken(token) {
+      const tokens = loadStoredTokens();
+      if (!tokens.includes(token)) {
+        tokens.unshift(token);
+        localStorage.setItem(TOKEN_STORE, JSON.stringify(tokens.slice(0, 20)));
+      }
+      return tokens;
+    }
+
+    function forgetToken(token) {
+      const tokens = loadStoredTokens().filter(t => t !== token);
+      localStorage.setItem(TOKEN_STORE, JSON.stringify(tokens));
+      return tokens;
+    }
+
+    // ── Переключение табов ─────────────────────────────────────────────────
     function showTab(tab) {
       document.querySelectorAll('.tab-section').forEach(el => el.classList.add('hidden'));
       document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('bg-blue-600', 'text-white'));
@@ -126,58 +235,79 @@
 
     // Загрузка токенов, заполнение списков и панели
     async function loadTokens() {
+      // Список приходит хешами: значения токенов сервер не хранит.
+      // Значения берутся из localStorage того браузера, где они были выпущены.
+      let hashes = [];
       try {
-        const res = await fetch('/user/tokens');
-        if (!res.ok) throw new Error('Ошибка загрузки токенов');
-        const data = await res.json();
-        const tokens = data.tokens || [];
-
-        const uploadSelect = document.getElementById('upload-token-select');
-        const watchSelect = document.getElementById('watch-token-select');
-        [uploadSelect, watchSelect].forEach(select => {
-          select.innerHTML = '<option value="">-- Выберите токен --</option>';
-          tokens.forEach(t => {
-            const opt = document.createElement('option');
-            opt.value = t;
-            opt.textContent = t.length > 25 ? t.slice(0, 25) + '...' : t;
-            select.appendChild(opt);
-          });
-        });
-
-        // Обновление списка токенов в панели токенов
-        const list = document.getElementById('token-list');
-        list.innerHTML = '';
-        tokens.forEach(token => {
-          const el = document.createElement('li');
-          el.className = "flex justify-between items-center bg-gray-100 p-4 rounded shadow-sm";
-          el.innerHTML = `
-            <code class="text-sm break-all text-gray-700">${token}</code>
-            <button class="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600" onclick="deleteToken('${token}')">🗑 Удалить</button>
-          `;
-          list.appendChild(el);
-        });
-
-        return tokens;
+        const res = await apiFetch('/api/tokens');
+        if (res) {
+          if (!res.ok) throw new Error(await readError(res, 'Ошибка загрузки токенов'));
+          const data = await res.json();
+          hashes = data.hashes || [];
+        } else {
+          return [];
+        }
       } catch (error) {
         alert(error.message);
         return [];
       }
+
+      const local = loadStoredTokens();
+
+      const uploadSelect = document.getElementById('upload-token-select');
+      const watchSelect = document.getElementById('watch-token-select');
+      [uploadSelect, watchSelect].forEach(select => {
+        select.innerHTML = '<option value="">-- Выберите токен --</option>';
+        local.forEach(t => {
+          const opt = document.createElement('option');
+          opt.value = t;
+          opt.textContent = t.length > 28 ? t.slice(0, 28) + '…' : t;
+          select.appendChild(opt);
+        });
+      });
+
+      // Панель показывает токены, значения которых известны этому браузеру.
+      // Сопоставить их с записями сервера нельзя: сервер хранит только хеши,
+      // а значения токенов не восстанавливаются. Поэтому выводится то, чем
+      // можно реально воспользоваться, а число записей на сервере — рядом.
+      const list = document.getElementById('token-list');
+      list.innerHTML = '';
+
+      const header = document.createElement('li');
+      header.className = 'text-sm text-gray-600';
+      header.textContent = `Выпущено на сервере: ${hashes.length}. Значения хранятся только в этом браузере.`;
+      list.appendChild(header);
+
+      local.forEach(token => {
+        const el = document.createElement('li');
+        el.className = 'flex justify-between items-center bg-gray-100 p-4 rounded shadow-sm';
+        el.innerHTML = `
+          <code class="text-sm break-all text-gray-700"></code>
+          <button class="bg-red-500 text-white px-3 py-1 rounded hover:bg-red-600">🗑 Отозвать</button>
+        `;
+        el.querySelector('code').textContent = token;
+        el.querySelector('button').addEventListener('click', () => deleteToken(token));
+        list.appendChild(el);
+      });
+
+      return local;
     }
 
     // Удаление токена
     async function deleteToken(token) {
-      if (!confirm("Удалить токен?")) return;
+      if (!confirm("Отозвать токен? Он перестанет работать сразу.")) return;
       try {
-        const res = await fetch('/user/token', {
+        const res = await apiFetch('/api/tokens', {
           method: 'DELETE',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ token })
+          body: JSON.stringify({ token }),
         });
+        if (!res) return;
         if (res.ok) {
+          forgetToken(token);
           await loadTokens();
         } else {
-          const text = await res.text();
-          alert("Ошибка: " + text);
+          alert("Ошибка: " + await readError(res, 'не удалось отозвать токен'));
         }
       } catch (e) {
         alert("Ошибка при удалении токена");
@@ -186,14 +316,22 @@
 
     // Создание токена
     document.getElementById('create-token').addEventListener('click', async () => {
-      const res = await fetch('/user/token', { method: 'GET' });
-        loadTokens();
-      if (res.ok) {
-        const newToken = await res.json();
-        loadTokens();
-      } else {
-        const err = await res.text();
-        alert("Ошибка создания токена: " + err);
+      try {
+        const res = await apiFetch('/api/tokens', { method: 'POST' });
+        if (!res) return;
+        if (!res.ok) {
+          alert("Ошибка создания токена: " + await readError(res, 'не удалось выпустить токен'));
+          return;
+        }
+        const data = await res.json();
+        storeToken(data.token);
+        await loadTokens();
+
+        // Значение показывается один раз: сервер хранит только хеш и
+        // восстановить токен не может.
+        alert('Токен выпущен. Сохраните его сейчас — показать его повторно невозможно.\n\n' + data.token);
+      } catch (e) {
+        alert('Ошибка создания токена');
       }
     });
 
@@ -255,13 +393,22 @@ document.getElementById('upload-form').addEventListener('submit', async e => {
         alert('Введите или выберите токен');
         return;
       }
+  if (!token) {
+    alert('Введите или выберите токен');
+    return;
+  }
+
   const formData = new FormData();
   formData.append('video', file);
   formData.append('name', name);
-  formData.append('token', token);
 
+  // Загрузка идёт через XMLHttpRequest, а не fetch: только он даёт событие
+  // прогресса отправки, без него полоса загрузки не работает.
   const xhr = new XMLHttpRequest();
-  xhr.open('POST', '/api/video', true);
+  xhr.open('POST', '/api/videos', true);
+  // Токен передаётся заголовком, а не полем формы: иначе он попал бы в
+  // тело запроса и в журналы сервера вместе с содержимым.
+  xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 
   const bar = document.getElementById('progress-bar');
   const wrapper = document.getElementById('progress-wrapper');
@@ -276,10 +423,12 @@ document.getElementById('upload-form').addEventListener('submit', async e => {
   };
 
   xhr.onload = () => {
-    if (xhr.status === 200) {
+    if (xhr.status === 201 || xhr.status === 200) {
       bar.style.width = '100%';
       bar.textContent = 'Готово';
       alert('Видео успешно загружено!');
+    } else if (xhr.status === 401) {
+      alert('Токен недействителен. Выпустите новый.');
     } else {
       alert('Ошибка загрузки: ' + xhr.responseText);
     }
@@ -291,7 +440,6 @@ document.getElementById('upload-form').addEventListener('submit', async e => {
 
   xhr.send(formData);
 });
-
 
 async function watchVideo() {
   const name = document.getElementById('watch-name').value.trim();
@@ -305,10 +453,23 @@ async function watchVideo() {
   }
 
   try {
-    const res = await fetch(`/api/search/video?name=${encodeURIComponent(name)}&token=${encodeURIComponent(token)}`);
-    if (!res.ok) throw new Error(await res.text());
+    // Название передаётся параметром query: это не секрет. Токен уходит
+    // заголовком — query попадает в журналы и историю браузера.
+    const res = await apiFetch(
+      `/api/videos?name=${encodeURIComponent(name)}`,
+      withToken(token),
+    );
+    if (!res) return;
+    if (!res.ok) {
+      if (res.status === 401) {
+        alert('Токен недействителен. Выпустите новый.');
+      } else {
+        alert('Ошибка: ' + await readError(res, 'не удалось получить список видео'));
+      }
+      return;
+    }
     const data = await res.json();
-    const videos = data.title || [];
+    const videos = data.videos || [];
 
     if (videos.length === 0) {
       alert('Видео не найдено');
@@ -331,14 +492,38 @@ async function watchVideo() {
       const btnPlay = document.createElement('button');
       btnPlay.textContent = '▶ Смотреть';
       btnPlay.className = 'bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded mr-2';
-      btnPlay.onclick = () => {
-        // Ставим src плеера и запускаем
-        player.src = `/api/video/stream?uuid=${encodeURIComponent(video.uuid)}&token=${encodeURIComponent(token)}`;
-        player.load();
-        player.play();
+      btnPlay.onclick = async () => {
+        // Файл нельзя отдать тегу <video src>: он не умеет передавать
+        // заголовок Authorization, а токен в адресе оставлять нельзя —
+        // он попадёт в журналы и в историю браузера. Поэтому файл
+        // забирается через fetch с заголовком и собирается в объект Blob.
+        //
+        // Цена: файл целиком собирается в памяти браузера. На сервере память
+        // при этом не растёт — там поток идёт порциями. Для больших файлов
+        // нужен MediaSource Extensions.
+        btnPlay.disabled = true;
+        try {
+          const res = await apiFetch(
+            `/api/videos/${encodeURIComponent(video.uuid)}/stream`,
+            withToken(token),
+          );
+          if (!res) return;
+          if (!res.ok) {
+            alert('Ошибка загрузки видео: ' + await readError(res, 'поток недоступен'));
+            return;
+          }
+          const blob = await res.blob();
+          if (player.src.startsWith('blob:')) URL.revokeObjectURL(player.src);
+          player.src = URL.createObjectURL(blob);
+          player.load();
+          await player.play();
 
-        // Показываем плеер
-        player.style.display = 'block';
+          // Показываем плеер
+          player.style.display = 'block';
+        } catch (err) {
+          alert('Ошибка загрузки видео');
+          return;
+        }
 
         // Деактивируем все кнопки "▶ Смотреть"
         const allPlayButtons = container.querySelectorAll('button');
@@ -359,23 +544,29 @@ async function watchVideo() {
       btnDelete.className = 'bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded';
       btnDelete.onclick = async () => {
         if (!confirm('Удалить это видео?')) return;
-        const delRes = await fetch(`/api/video?uuid=${encodeURIComponent(video.uuid)}&token=${encodeURIComponent(token)}`, {
-          method: 'DELETE'
-        });
+        const delRes = await apiFetch(
+          `/api/videos/${encodeURIComponent(video.uuid)}`,
+          withToken(token, { method: 'DELETE' }),
+        );
+        if (!delRes) return;
         if (delRes.ok) {
           alert('Удалено');
           
           // Скрываем плеер, если удалили текущее видео
-          if (player.src.includes(video.uuid)) {
-            player.style.display = 'none';
+          if (player.src.startsWith('blob:')) {
+            URL.revokeObjectURL(player.src);
             player.src = '';
+            player.load();
           }
+          player.style.display = 'none';
               item.remove();
 
-    // Если это видео сейчас воспроизводится — останавливаем плеер
-    if (player.src.includes(video.uuid)) {
+    // Если видео сейчас воспроизводится — освобождаем объект Blob
+    if (player.src.startsWith('blob:')) {
       player.pause();
+      URL.revokeObjectURL(player.src);
       player.src = '';
+      player.load();
       player.style.display = 'none';
     }
 
@@ -384,7 +575,7 @@ async function watchVideo() {
       container.innerHTML = '<p class="text-gray-400">Нет видео для отображения</p>';
     }
         } else {
-          alert('Ошибка удаления: ' + await delRes.text());
+          alert('Ошибка удаления: ' + await readError(delRes, 'не удалось удалить видео'));
         }
       };
 

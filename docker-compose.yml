@@ -1,60 +1,122 @@
-version: '3.8'
+# Локальный запуск всей системы: шлюз и три сервиса.
+#
+#   docker compose up --build
+#
+# Значения по умолчанию предназначены только для разработки.
 
 services:
-  postgres:
-    image: postgres:15
-    restart: always
+  postgres-auth:
+    image: postgres:17-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: appuser
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: user
-    ports:
-      - "15432:5432"
+      POSTGRES_USER: auth
+      POSTGRES_PASSWORD: auth
+      POSTGRES_DB: auth
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgauth:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auth -d auth"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
-  mongodb:
-    image: mongo:6
-    restart: always
-    ports:
-      - "27018:27017"
+  postgres-tokens:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tokens
+      POSTGRES_PASSWORD: tokens
+      POSTGRES_DB: tokens
+    volumes:
+      - pgtokens:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tokens -d tokens"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mongo:
+    image: mongo:8-alpine
+    restart: unless-stopped
     volumes:
       - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   auth-service:
     build:
       context: ./auth-service
-    ports:
-      - "50051:50051"
+      args:
+        CONTRACT_PATH: ../grpc-contract
     depends_on:
-      - postgres
+      postgres-auth:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://auth:auth@postgres-auth:5432/auth?sslmode=disable
+      # Подставьте настоящее значение: openssl rand -base64 48
+      JWT_SECRET: "${JWT_SECRET:-local-development-secret-not-for-production-use}"
+      HOST: 0.0.0.0
+      PORT: 50051
 
-  service-api-tokens:
+  api-tokens-service:
     build:
-      context: ./Service-api-tokens
-    ports:
-      - "50052:50052"
+      context: ./api-tokens-service
+      args:
+        CONTRACT_PATH: ../grpc-contract
     depends_on:
-      - postgres
+      postgres-tokens:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://tokens:tokens@postgres-tokens:5432/tokens?sslmode=disable
+      HOST: 0.0.0.0
+      PORT: 50052
 
   video-service:
     build:
       context: ./video-service
-    ports:
-      - "50053:50053"
+      args:
+        CONTRACT_PATH: ../grpc-contract
     depends_on:
-      - mongodb
+      mongo:
+        condition: service_healthy
+    environment:
+      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_NAME: video
+      VIDEO_DIR: /app/storage/video
+      HOST: 0.0.0.0
+      PORT: 50053
+    volumes:
+      - videos:/app/storage
 
-  main-app:
+  video-platform:
     build:
       context: .
-    ports:
-      - "8080:8080"
+      args:
+        CONTRACT_PATH: ../grpc-contract
     depends_on:
       - auth-service
-      - service-api-tokens
+      - api-tokens-service
       - video-service
+    ports:
+      - "8080:8080"
+    environment:
+      AUTH_HOST: auth-service
+      AUTH_PORT: 50051
+      TOKEN_HOST: api-tokens-service
+      TOKEN_PORT: 50052
+      VIDEO_HOST: video-service
+      VIDEO_PORT: 50053
+      HOST: 0.0.0.0
+      PORT: 8080
+      # Локально по http Secure-cookie не работает, поэтому выключаем.
+      # Заголовки безопасности включаются вместе с этим флагом.
+      COOKIE_SECURE: "false"
 
 volumes:
-  pgdata:
+  pgauth:
+  pgtokens:
   mongodata:
+  videos:
