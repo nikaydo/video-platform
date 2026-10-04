@@ -1,60 +1,118 @@
-version: '3.8'
+# Запуск всей системы одной командой.
+#
+#   task clone-services    # клонировать сервисы в соседние каталоги
+#   task up
+#
+# Шлюз собирается из этого репозитория, остальные сервисы — из соседних
+# клонов: у каждого своя версия, своя база и своя схема развёртывания.
+# Держать систему в одном репозитории нельзя — сервисы выходят из строя
+# независимо.
+#
+# Контракт клонировать не нужно: он подтягивается из прокси модулей по
+# версии из go.mod каждого сервиса.
 
 services:
   postgres:
-    image: postgres:15
-    restart: always
+    image: postgres:17-alpine
+    restart: unless-stopped
     environment:
-      POSTGRES_USER: appuser
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: user
+      POSTGRES_USER: auth
+      POSTGRES_PASSWORD: auth
+      POSTGRES_DB: auth
     ports:
-      - "15432:5432"
+      - "5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U auth -d auth"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
 
-  mongodb:
-    image: mongo:6
-    restart: always
+  mongo:
+    image: mongo:8-alpine
+    restart: unless-stopped
     ports:
-      - "27018:27017"
+      - "27017:27017"
     volumes:
       - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   auth-service:
     build:
-      context: ./auth-service
+      context: ../auth-service
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "50051:50051"
-    depends_on:
-      - postgres
+    environment:
+      DATABASE_URL: postgres://auth:auth@postgres:5432/auth?sslmode=disable
+      # Локальное значение только для разработки. В остальных случаях
+      # задайте свой: openssl rand -base64 48
+      JWT_SECRET: "${JWT_SECRET:-local-development-secret-not-for-production-use}"
+      ACCESS_TOKEN_TTL: 15m
+      REFRESH_TOKEN_TTL: 720h
+      JWT_ISSUER: video-platform
 
-  service-api-tokens:
+  api-tokens-service:
     build:
-      context: ./Service-api-tokens
+      context: ../api-tokens-service
+    depends_on:
+      postgres:
+        condition: service_healthy
     ports:
       - "50052:50052"
-    depends_on:
-      - postgres
+    environment:
+      DATABASE_URL: postgres://tokens:tokens@postgres:5432/tokens?sslmode=disable
+      PORT: 50052
 
   video-service:
     build:
-      context: ./video-service
+      context: ../video-service
+    depends_on:
+      mongo:
+        condition: service_healthy
     ports:
       - "50053:50053"
-    depends_on:
-      - mongodb
+    environment:
+      MONGODB_URI: mongodb://mongo:27017
+      MONGODB_NAME: video
+      VIDEO_DIR: /app/storage/video
+      PORT: 50053
+    volumes:
+      - videos:/app/storage
 
-  main-app:
+  video-platform:
     build:
       context: .
-    ports:
-      - "8080:8080"
     depends_on:
       - auth-service
-      - service-api-tokens
+      - api-tokens-service
       - video-service
+    ports:
+      - "8080:8080"
+    environment:
+      AUTH_HOST: auth-service
+      AUTH_PORT: 50051
+      TOKEN_HOST: api-tokens-service
+      TOKEN_PORT: 50052
+      VIDEO_HOST: video-service
+      VIDEO_PORT: 50053
+      # Локально по http Secure-cookie не работает, поэтому выключаем.
+      COOKIE_SECURE: "false"
+      SESSION_TTL: 24h
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
 
 volumes:
   pgdata:
   mongodata:
+  videos:

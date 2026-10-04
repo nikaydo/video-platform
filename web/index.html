@@ -35,14 +35,14 @@
       const login = document.getElementById('login').value;
       const pass = document.getElementById('password').value;
 
-      const res = await fetch('/signin', {
+      const res = await fetch('/api/signin', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ login, pass })
       });
 
       if (res.ok) {
-        window.location.href = '/user';
+        window.location.href = '/app';
       } else {
         const data = await res.text();
         errorDiv.textContent = data || 'Login error';

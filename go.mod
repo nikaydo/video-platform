@@ -1,19 +1,19 @@
-module main
+module github.com/nikaydo/video-platform
 
-go 1.24.2
+go 1.25.0
 
 require (
-	github.com/go-chi/chi v1.5.5
-	github.com/golang/mock v1.6.0
+	github.com/caarlos0/env/v11 v11.3.1
+	github.com/go-chi/chi/v5 v5.2.2
 	github.com/joho/godotenv v1.5.1
-	github.com/nikaydo/grpc-contract v0.0.9
-	google.golang.org/grpc v1.73.0
+	github.com/nikaydo/grpc-contract v0.4.0
+	google.golang.org/grpc v1.81.0
 )
 
 require (
-	golang.org/x/net v0.38.0 // indirect
-	golang.org/x/sys v0.32.0 // indirect
-	golang.org/x/text v0.24.0 // indirect
-	google.golang.org/genproto/googleapis/rpc v0.0.0-20250324211829-b45e905df463 // indirect
-	google.golang.org/protobuf v1.36.6 // indirect
+	golang.org/x/net v0.51.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/text v0.34.0 // indirect
+	google.golang.org/genproto/googleapis/rpc v0.0.0-20260226221140-a57be14db171 // indirect
+	google.golang.org/protobuf v1.36.11 // indirect
 )

@@ -1,22 +1,36 @@
-FROM golang:latest AS builder
+# Секреты в образ не попадают: копируется только код, а конфигурация приходит
+# извне через переменные окружения.
 
-WORKDIR /app
+FROM golang:1.25-alpine AS builder
 
+WORKDIR /src
+
+# Сначала манифесты: слой с зависимостями переиспользуется, пока не меняются
+# версии. Контракт приходит из прокси модулей по версии из go.mod.
 COPY go.mod go.sum ./
+
 RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o main ./cmd
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w" \
+    -o /out/video-platform ./cmd
 
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates
+FROM alpine:3.20
 
-WORKDIR /root/
+RUN apk add --no-cache ca-certificates tzdata wget \
+    && adduser -D -u 10001 app
 
-COPY --from=builder /app/main .
-COPY .env ./
-COPY ./web ./web
+WORKDIR /app
 
-EXPOSE 8080 50051 50052
-CMD ["./main"]
+COPY --from=builder /out/video-platform /app/video-platform
+COPY --from=builder /src/web /app/web
+
+# Файл .env намеренно не копируется: секреты остались бы в слоях образа.
+USER app
+
+EXPOSE 8080
+
+ENTRYPOINT ["/app/video-platform"]
