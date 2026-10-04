@@ -1,0 +1,29 @@
+# Переменные окружения — реальные значения только локально
+.env
+.env.local
+.env.*.local
+
+# Сборка
+/bin/
+/dist/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Тесты и покрытие
+*.test
+*.out
+coverage.*
+
+# Логи
+*.log
+
+# IDE / редакторы
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# ОС
+Thumbs.db
