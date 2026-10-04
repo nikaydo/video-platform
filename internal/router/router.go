@@ -83,20 +83,31 @@ func New(p Params) http.Handler {
 	})
 
 	if p.StaticDir != "" {
-		files := http.Dir(p.StaticDir)
-		r.Get("/", func(w http.ResponseWriter, req *http.Request) {
-			http.ServeFile(w, req, filepath.Join(p.StaticDir, "index.html"))
-		})
-		r.Get("/login", func(w http.ResponseWriter, req *http.Request) {
-			http.ServeFile(w, req, filepath.Join(p.StaticDir, "index.html"))
-		})
-		r.Get("/app", func(w http.ResponseWriter, req *http.Request) {
-			http.ServeFile(w, req, filepath.Join(p.StaticDir, "user.html"))
-		})
-		r.Handle("/*", http.FileServer(files))
+		// Страницы отдаются по коротким путям, а не по именам файлов:
+		// переименование index.html в login.html не должно ломать ссылки
+		// внутри фронтенда.
+		for path, file := range map[string]string{
+			"/":         "index.html",
+			"/login":    "index.html",
+			"/register": "register.html",
+			"/app":      "user.html",
+		} {
+			r.Get(path, serveStatic(p.StaticDir, file))
+		}
+		r.Handle("/*", http.FileServer(http.Dir(p.StaticDir)))
 	}
 
 	return r
+}
+
+// serveStatic возвращает обработчик, отдающий указанный файл каталога.
+//
+// Путь к файлу собирается через filepath.Join из двух констант, а не из
+// значения запроса, поэтому подделать имя файла параметром URL нельзя.
+func serveStatic(dir, file string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, filepath.Join(dir, file))
+	}
 }
 
 // healthHandler сообщает о готовности шлюза.

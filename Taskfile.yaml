@@ -63,8 +63,19 @@ tasks:
     cmds:
       - gofmt -w .
 
+  clone-services:
+    desc: Клонировать соседние сервисы, нужные для сборки
+    cmds:
+      - |
+        for s in grpc-contract auth-service api-tokens-service video-service; do
+          if [ ! -d "../$s" ]; then
+            git clone --depth 1 "https://github.com/nikaydo/$s.git" "../$s"
+          fi
+        done
+
   up:
-    desc: Поднять сервис и базу в Docker
+    desc: Поднять всю систему в Docker
+    deps: [clone-services]
     cmds:
       - docker compose up --build
 
